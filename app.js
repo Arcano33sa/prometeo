@@ -55,6 +55,7 @@
   const IDENTITY_LOGO_MAX_INPUT_BYTES = 8 * 1024 * 1024;
   const IDENTITY_LOGO_MAX_STORED_BYTES = 700 * 1024;
   const PROMETEO_LOGO_PATH = 'assets/prometeo-logo.png';
+  const PROMETEO_HORIZONTAL_LOGO_PATH = 'assets/prometeo-logo-horizontal.png';
   const LEGACY_FACTORY_IDENTITY_NAMES = new Set(['DOREN', 'DOREN FASHION & STYLE']);
   const identityLogoDraft = { main: undefined, horizontal: undefined };
   let identityLogoProcessing = 0;
@@ -154,7 +155,7 @@
   }
 
   function businessIdentityHorizontalLogoSrc(identity) {
-    return identity?.horizontalLogo?.dataUrl || identity?.mainLogo?.dataUrl || PROMETEO_LOGO_PATH;
+    return identity?.horizontalLogo?.dataUrl || identity?.mainLogo?.dataUrl || PROMETEO_HORIZONTAL_LOGO_PATH;
   }
 
   function armBusinessLogoFallback(image) {
@@ -198,12 +199,11 @@
   function syncGlobalIdentityShell(identity = getBusinessIdentity()) {
     const businessName = businessIdentityDisplayName(identity);
     const appName = identity.appName || APP.name;
-    const mainLogo = businessIdentityMainLogoSrc(identity);
     const horizontalLogo = businessIdentityHorizontalLogoSrc(identity);
 
     const sidebarLogo = document.getElementById('sidebarBrandLogo');
     if (sidebarLogo) {
-      setBusinessLogoSource(sidebarLogo, mainLogo, businessName);
+      setBusinessLogoSource(sidebarLogo, horizontalLogo, businessName);
       sidebarLogo.closest('.brand')?.setAttribute('aria-label', businessName);
     }
 
@@ -966,7 +966,7 @@
     const state = store.getState();
     const identity = getBusinessIdentity(state);
     const identityDisplayName = businessIdentityDisplayName(identity);
-    const mainLogoSrc = businessIdentityMainLogoSrc(identity);
+    const horizontalLogoSrc = businessIdentityHorizontalLogoSrc(identity);
     const summary = operationalSummary(state);
     const quickModules = modules.filter((item) => ['ventas', 'inventario', 'clientes', 'cobros', 'compras', 'proveedores', 'gastos'].includes(item.id));
     const periodLabel = summaryMonth === 'todos' && summaryYear === 'todos'
@@ -983,7 +983,7 @@
             ${(identity.slogan || identity.ownerName) ? `<div class="dashboard-heading__identity-meta">${identity.slogan ? `<span>${escapeHtml(identity.slogan)}</span>` : ''}${identity.ownerName ? `<small>Propietario: ${escapeHtml(identity.ownerName)}</small>` : ''}</div>` : ''}
           </div>
           <div class="dashboard-heading__logo-wrap" aria-label="${escapeHtml(identityDisplayName)}">
-            <img data-business-logo="true" src="${mainLogoSrc}" alt="${escapeHtml(identityDisplayName)}" class="dashboard-heading__logo">
+            <img data-business-logo="true" src="${horizontalLogoSrc}" alt="${escapeHtml(identityDisplayName)}" class="dashboard-heading__logo">
           </div>
         </div>
 

@@ -140,6 +140,23 @@
     return String(identity?.businessName || identity?.appName || APP.name).trim() || APP.name;
   }
 
+  function normalizeApplicationTitlePart(value) {
+    return String(value || '').trim().replace(/\s+/g, ' ');
+  }
+
+  function buildApplicationTitle(moduleLabel, identity = getBusinessIdentity()) {
+    const parts = [APP.brand];
+    const businessName = normalizeApplicationTitlePart(identity?.businessName);
+    const moduleName = normalizeApplicationTitlePart(moduleLabel) || modules[0].label;
+    if (businessName) parts.push(businessName);
+    parts.push(moduleName);
+    return parts.join(' - ');
+  }
+
+  function syncApplicationTitle(moduleLabel, identity = getBusinessIdentity()) {
+    document.title = buildApplicationTitle(moduleLabel, identity);
+  }
+
   function resetIdentityLogoDraft() {
     identityLogoDraft.main = undefined;
     identityLogoDraft.horizontal = undefined;
@@ -254,6 +271,10 @@
           respaldo: {
             lastExportAt: null,
             lastImportAt: null
+          },
+          pwa: {
+            lastCheckAt: null,
+            lastUpdateAt: null
           }
         }
       };
@@ -386,6 +407,13 @@
         if (!('lastExportAt' in existing.configuraciones.respaldo)) { existing.configuraciones.respaldo.lastExportAt = null; changed = true; }
         if (!('lastImportAt' in existing.configuraciones.respaldo)) { existing.configuraciones.respaldo.lastImportAt = null; changed = true; }
       }
+      if (!existing.configuraciones.pwa || typeof existing.configuraciones.pwa !== 'object') {
+        existing.configuraciones.pwa = { lastCheckAt: null, lastUpdateAt: null };
+        changed = true;
+      } else {
+        if (!('lastCheckAt' in existing.configuraciones.pwa)) { existing.configuraciones.pwa.lastCheckAt = null; changed = true; }
+        if (!('lastUpdateAt' in existing.configuraciones.pwa)) { existing.configuraciones.pwa.lastUpdateAt = null; changed = true; }
+      }
 
       const defaultExpenseCategories = ['Transporte', 'Publicidad', 'Bolsas', 'Delivery', 'Empaque'];
       if (!Array.isArray(existing.configuraciones.gastosCategorias) || !existing.configuraciones.gastosCategorias.length) {
@@ -428,7 +456,7 @@
         const raw = localStorage.getItem(this.key);
         return raw ? JSON.parse(raw) : null;
       } catch (error) {
-        console.error('[DOREN] No se pudo leer almacenamiento local.', error);
+        console.error('[PROMETEO] No se pudo leer almacenamiento local.', error);
         return null;
       }
     }
@@ -443,7 +471,7 @@
         localStorage.setItem(this.key, JSON.stringify(value));
         return true;
       } catch (error) {
-        console.error('[DOREN] No se pudo guardar almacenamiento local.', error);
+        console.error('[PROMETEO] No se pudo guardar almacenamiento local.', error);
         return false;
       }
     }
@@ -504,7 +532,7 @@
           request.onerror = () => reject(request.error || new Error('No se pudo leer la foto'));
         });
       } catch (error) {
-        console.warn('[DOREN] Foto no disponible.', error);
+        console.warn('[PROMETEO] Foto no disponible.', error);
         return null;
       }
     }
@@ -519,7 +547,7 @@
           tx.onerror = () => reject(tx.error || new Error('No se pudo quitar la foto'));
         });
       } catch (error) {
-        console.warn('[DOREN] No se pudo quitar la foto.', error);
+        console.warn('[PROMETEO] No se pudo quitar la foto.', error);
         return false;
       }
     }
@@ -614,6 +642,7 @@
   let swRegistrationPromise = null;
   let swUpdateCheckPromise = null;
   let reloadingForServiceWorker = false;
+  let swUpdateActivationExpected = false;
   let hasSeenServiceWorkerController = Boolean(('serviceWorker' in navigator) && navigator.serviceWorker.controller);
   const SW_UPDATE_APPLIED_SESSION_KEY = 'doren:pwa:update-applied';
   const SW_ROOT_MIGRATION_RELOAD_KEY = 'doren:pwa:root-sw-migration-reload';
@@ -628,6 +657,17 @@
     phase: ('serviceWorker' in navigator) ? 'initializing' : 'unsupported',
     error: null
   };
+  const pwaRestartFlow = {
+    phase: 'ready',
+    busy: false,
+    error: null
+  };
+  const pwaUpdateFlow = {
+    pendingWorker: null,
+    applying: false
+  };
+
+  const PWA_MANAGED_CACHE_NAME_PATTERN = /^(?:prometeo|doren)-v[0-9][a-z0-9._-]*-(?:core|runtime)$/i;
 
   const els = {
     content: document.getElementById('appContent'),
@@ -1200,6 +1240,26 @@
     `;
   }
 
+  function getPwaConfiguration(state = store.getState()) {
+    const raw = state?.configuraciones?.pwa;
+    return raw && typeof raw === 'object' ? raw : { lastCheckAt: null, lastUpdateAt: null };
+  }
+
+  function recordPwaTimestamp(field) {
+    if (!['lastCheckAt', 'lastUpdateAt'].includes(field)) return false;
+    const now = new Date().toISOString();
+    return store.transact((draft) => {
+      draft.configuraciones = draft.configuraciones || {};
+      draft.configuraciones.pwa = draft.configuraciones.pwa || { lastCheckAt: null, lastUpdateAt: null };
+      draft.configuraciones.pwa[field] = now;
+    });
+  }
+
+  function pendingPwaWorker() {
+    const candidate = swRegistration?.waiting || pwaUpdateFlow.pendingWorker || null;
+    return candidate?.state === 'installed' ? candidate : null;
+  }
+
   function renderConfiguration(module) {
     resetIdentityLogoDraft();
     const state = store.getState();
@@ -1213,6 +1273,8 @@
     const pwaAvailable = 'serviceWorker' in navigator;
     const standalone = window.matchMedia?.('(display-mode: standalone)')?.matches || window.navigator.standalone === true;
     const swStatusLabel = serviceWorkerStatusLabel();
+    const pwaConfig = getPwaConfiguration(state);
+    const canApplyPwaUpdate = Boolean(pendingPwaWorker());
     const mainLogoSrc = identity.mainLogo?.dataUrl || PROMETEO_LOGO_PATH;
     const horizontalLogoSrc = businessIdentityHorizontalLogoSrc(identity);
     return `
@@ -1352,12 +1414,26 @@
               <div class="info-row"><dt>Modo</dt><dd>${standalone ? 'Standalone' : 'Navegador'}</dd></div>
               <div class="info-row"><dt>Service Worker</dt><dd id="pwaSwStatus">${escapeHtml(swStatusLabel)}</dd></div>
               <div class="info-row"><dt>Conexión</dt><dd id="pwaConnectionStatus">${navigator.onLine ? 'En línea' : 'Sin conexión'}</dd></div>
+              <div class="info-row"><dt>Última búsqueda</dt><dd id="pwaLastCheckAt">${pwaConfig.lastCheckAt ? formatDate(pwaConfig.lastCheckAt, true) : 'Nunca'}</dd></div>
+              <div class="info-row"><dt>Última actualización</dt><dd id="pwaLastUpdateAt">${pwaConfig.lastUpdateAt ? formatDate(pwaConfig.lastUpdateAt, true) : 'Nunca'}</dd></div>
             </dl>
             <div class="backup-actions">
               <button class="button button--primary" type="button" data-action="install-pwa" ${standalone ? 'disabled' : ''}>${standalone ? 'App instalada' : 'Instalar app'}</button>
               <button class="button button--secondary" type="button" data-action="check-pwa-update" ${pwaAvailable ? '' : 'disabled'}>Buscar actualización</button>
+              <button id="pwaApplyUpdateButton" class="button button--secondary" type="button" data-action="apply-pwa-update" ${canApplyPwaUpdate ? '' : 'hidden disabled'}>Aplicar actualización</button>
             </div>
-            <p class="config-note">Los módulos principales funcionan con datos locales. La caché PWA se renueva por versión y elimina cachés antiguas.</p>
+            <section class="pwa-restart-panel" aria-labelledby="pwaRestartTitle">
+              <div class="pwa-restart-panel__copy">
+                <div class="pwa-restart-panel__heading">
+                  <strong id="pwaRestartTitle">Reiniciar aplicación</strong>
+                  <span id="pwaRestartStatus" class="status-pill status-pill--neutral" aria-live="polite">${escapeHtml(pwaRestartStatusLabel())}</span>
+                </div>
+                <p>Reinicia los recursos técnicos de PROMETEO y vuelve a cargar la versión disponible. No elimina datos del negocio.</p>
+                <small id="pwaRestartDetail">${escapeHtml(pwaRestartStatusDetail())}</small>
+              </div>
+              <button id="pwaRestartButton" class="button button--secondary pwa-restart-button" type="button" data-action="open-pwa-restart-confirmation" ${pwaRestartFlow.busy ? 'disabled' : ''}>Reiniciar aplicación</button>
+            </section>
+            <p class="config-note">Buscar actualizaciones comprueba versiones nuevas; Reiniciar aplicación revisa el Service Worker, limpia únicamente recursos técnicos propios de PROMETEO y recarga la versión disponible sin borrar información del negocio.</p>
           </article>
 
           <article class="info-card config-danger-card" aria-labelledby="dangerZoneTitle" ${dangerDeleteFlow.busy ? 'aria-busy="true"' : ''}>
@@ -1503,7 +1579,7 @@
       setIdentityLogoPreview(kind, optimized.dataUrl, 'Cambio listo para guardar', true);
       showToast(kind === 'main' ? 'Logotipo principal listo para guardar.' : 'Logotipo horizontal listo para guardar.');
     } catch (error) {
-      console.error('[DOREN] No se pudo preparar el logotipo.', error);
+      console.error('[PROMETEO] No se pudo preparar el logotipo.', error);
       const current = normalizeBusinessIdentity(store.getState().configuraciones?.identidad);
       const record = kind === 'main' ? current.mainLogo : current.horizontalLogo;
       const fallbackSrc = kind === 'horizontal' ? businessIdentityHorizontalLogoSrc(current) : businessIdentityMainLogoSrc(current);
@@ -1568,7 +1644,7 @@
       renderRoute();
       showToast('Identidad del negocio guardada correctamente.');
     } catch (error) {
-      console.error('[DOREN] No se pudo guardar la identidad del negocio.', error);
+      console.error('[PROMETEO] No se pudo guardar la identidad del negocio.', error);
       showToast(error?.message || 'No se pudo guardar la identidad del negocio.', 'error');
     } finally {
       if (button && document.body.contains(button)) { button.disabled = false; button.textContent = originalText; }
@@ -2169,8 +2245,219 @@
     showToast('Usa la opción “Instalar app” o “Añadir a pantalla de inicio” de tu navegador.', 'error');
   }
 
+  function pwaRestartStatusLabel() {
+    if (pwaRestartFlow.phase === 'preparing') return 'Preparando reinicio…';
+    if (pwaRestartFlow.phase === 'restarting') return 'Reiniciando…';
+    if (pwaRestartFlow.phase === 'error') return 'Reintento disponible';
+    return 'Listo';
+  }
+
+  function pwaRestartStatusDetail() {
+    if (pwaRestartFlow.phase === 'preparing') return 'Validando Service Worker y preparando la limpieza técnica segura.';
+    if (pwaRestartFlow.phase === 'restarting') return 'Actualizando el Service Worker, renovando cachés técnicas propias y preparando una recarga limpia.';
+    if (pwaRestartFlow.phase === 'error') return pwaRestartFlow.error || 'El reinicio técnico no pudo completarse. Puedes reintentarlo sin riesgo para tus datos.';
+    return 'Disponible para renovar recursos técnicos de PROMETEO sin borrar datos operativos, identidad ni fotografías.';
+  }
+
+  function refreshPwaRestartUi() {
+    const status = document.getElementById('pwaRestartStatus');
+    if (status) {
+      status.textContent = pwaRestartStatusLabel();
+      status.classList.toggle('status-pill--success', false);
+      status.classList.toggle('status-pill--neutral', pwaRestartFlow.phase !== 'error');
+      status.classList.toggle('status-pill--danger', pwaRestartFlow.phase === 'error');
+    }
+    const detail = document.getElementById('pwaRestartDetail');
+    if (detail) detail.textContent = pwaRestartStatusDetail();
+    const button = document.getElementById('pwaRestartButton');
+    if (button) button.disabled = pwaRestartFlow.busy;
+  }
+
+  function openPwaRestartConfirmation() {
+    if (pwaRestartFlow.busy) return;
+    openModal(`
+      <div class="modal-header">
+        <div>
+          <p class="modal-eyebrow pwa-restart-modal-eyebrow">REINICIO TÉCNICO PROMETEO</p>
+          <h2 id="modalTitle">Reiniciar aplicación</h2>
+          <p>Renueva los recursos técnicos de la PWA sin borrar información del negocio.</p>
+        </div>
+        <button class="modal-close" type="button" data-action="close-modal" aria-label="Cerrar">×</button>
+      </div>
+      <div class="modal-body pwa-restart-confirm-body">
+        <section class="pwa-restart-explanation">
+          <strong>PROMETEO revisará su Service Worker, renovará únicamente sus cachés técnicas y volverá a cargar la aplicación.</strong>
+          <p>Si existe una versión nueva pendiente, se intentará activarla. Si no existe, el reinicio seguirá renovando los recursos técnicos disponibles.</p>
+        </section>
+        <section class="pwa-restart-preserved" aria-label="Información que no se elimina">
+          <h3>Este reinicio NO elimina</h3>
+          <div class="pwa-restart-preserved-grid">
+            <span>Datos operativos</span>
+            <span>Identidad del negocio</span>
+            <span>Fotografías</span>
+            <span>Firebase</span>
+            <span>Usuarios</span>
+          </div>
+        </section>
+        <p class="pwa-restart-stage-note">No usa la lógica de Borrado seguro, no ejecuta <code>localStorage.clear()</code>, no elimina IndexedDB y no modifica por sí solo la fecha de “Última actualización”.</p>
+      </div>
+      <div class="modal-footer pwa-restart-modal-footer">
+        <button class="button button--secondary" type="button" data-action="close-modal">Cancelar</button>
+        <button id="confirmPwaRestartButton" class="button button--primary" type="button" data-action="execute-pwa-restart">Reiniciar aplicación</button>
+      </div>`, 'modal--medium modal--pwa-restart');
+  }
+
+  function isPrometeoManagedCacheName(name) {
+    return PWA_MANAGED_CACHE_NAME_PATTERN.test(String(name || ''));
+  }
+
+  async function clearPrometeoRuntimeCachesFallback() {
+    if (!('caches' in window)) return { supported: false, deleted: 0, inspected: 0 };
+    const keys = await caches.keys();
+    const managedRuntimeKeys = keys.filter((key) => isPrometeoManagedCacheName(key) && /-runtime$/i.test(key));
+    let deleted = 0;
+    for (const key of managedRuntimeKeys) {
+      try {
+        if (await caches.delete(key)) deleted += 1;
+      } catch (error) {
+        console.warn(`[PROMETEO] No se pudo limpiar la caché técnica ${key}.`, error);
+      }
+    }
+    return { supported: true, deleted, inspected: keys.length };
+  }
+
+  function postMessageToServiceWorker(worker, message, timeoutMs = 1800) {
+    if (!worker || typeof MessageChannel === 'undefined') return Promise.resolve(null);
+    return new Promise((resolve) => {
+      const channel = new MessageChannel();
+      let settled = false;
+      const finish = (value) => {
+        if (settled) return;
+        settled = true;
+        window.clearTimeout(timer);
+        try { channel.port1.close(); } catch (error) {}
+        resolve(value);
+      };
+      const timer = window.setTimeout(() => finish(null), timeoutMs);
+      channel.port1.onmessage = (event) => finish(event.data || null);
+      try {
+        worker.postMessage(message, [channel.port2]);
+      } catch (error) {
+        console.warn('[PROMETEO] El Service Worker no aceptó la solicitud de reinicio técnico.', error);
+        finish(null);
+      }
+    });
+  }
+
+  async function refreshPrometeoTechnicalCaches(registration) {
+    const worker = registration?.active || navigator.serviceWorker?.controller || null;
+    if (worker) {
+      const response = await postMessageToServiceWorker(worker, {
+        type: 'PROMETEO_TECHNICAL_RESTART',
+        refreshCurrent: Boolean(navigator.onLine)
+      });
+      if (response?.ok) return { method: 'service-worker', ...response };
+    }
+
+    const fallback = await clearPrometeoRuntimeCachesFallback();
+    return { method: 'window-fallback', ok: true, ...fallback };
+  }
+
+  async function executePwaRestartFlow() {
+    if (pwaRestartFlow.busy) return;
+    pwaRestartFlow.busy = true;
+    pwaRestartFlow.phase = 'preparing';
+    pwaRestartFlow.error = null;
+
+    const modal = modalRoot()?.querySelector('.modal--pwa-restart');
+    if (modal) {
+      modal.setAttribute('aria-busy', 'true');
+      modal.querySelectorAll('button').forEach((control) => { control.disabled = true; });
+    }
+    const confirmButton = document.getElementById('confirmPwaRestartButton');
+    if (confirmButton) confirmButton.textContent = 'Preparando reinicio…';
+    refreshPwaRestartUi();
+
+    let registration = null;
+    let updateResult = null;
+    let updateError = null;
+
+    try {
+      if (swUpdateCheckPromise) {
+        try { await swUpdateCheckPromise; }
+        catch (error) { console.warn('[PROMETEO] La comprobación PWA previa terminó con error.', error); }
+      }
+
+      registration = await ensureServiceWorkerRegistration({ allowRegister: true, waitForReady: true });
+      pwaRestartFlow.phase = 'restarting';
+      if (confirmButton?.isConnected) confirmButton.textContent = 'Reiniciando…';
+      refreshPwaRestartUi();
+
+      if (registration && navigator.onLine) {
+        try {
+          observeServiceWorkerRegistration(registration);
+          swUpdateActivationExpected = true;
+          updateResult = await checkRegistrationForUpdate(registration, { activate: true });
+        } catch (error) {
+          updateError = error;
+          console.warn('[PROMETEO] No se pudo completar la comprobación de actualización durante el reinicio.', error);
+        }
+      }
+
+      if (!updateResult?.updated) swUpdateActivationExpected = false;
+
+      const latestRegistration = await findExistingServiceWorkerRegistration().catch(() => null);
+      if (latestRegistration) {
+        registration = latestRegistration;
+        observeServiceWorkerRegistration(registration);
+        syncServiceWorkerState(registration);
+      }
+
+      const cacheResult = await refreshPrometeoTechnicalCaches(registration).catch((error) => {
+        console.warn('[PROMETEO] La limpieza técnica por Cache Storage no pudo completarse.', error);
+        return { ok: false, method: 'unavailable', error };
+      });
+
+      if (updateResult?.updated && updateResult.outcome === 'activated') {
+        console.info('[PROMETEO] Reinicio técnico: se activó una versión nueva del Service Worker.');
+      } else if (updateResult?.updated) {
+        console.info(`[PROMETEO] Reinicio técnico: actualización detectada; estado final ${updateResult.outcome || updateResult.worker?.state || 'pendiente'}.`);
+      } else if (updateError) {
+        console.info('[PROMETEO] Reinicio técnico: se continúa con la versión disponible pese a un error de actualización.');
+      }
+
+      if (cacheResult?.method === 'window-fallback') {
+        console.info(`[PROMETEO] Reinicio técnico: fallback seguro de caché aplicado (${cacheResult.deleted || 0} runtime propia(s) eliminada(s)).`);
+      }
+
+      closeModal(true);
+      refreshPwaRestartUi();
+      window.setTimeout(() => {
+        try {
+          window.location.reload();
+        } catch (error) {
+          pwaRestartFlow.busy = false;
+          pwaRestartFlow.phase = 'error';
+          pwaRestartFlow.error = 'La limpieza técnica terminó, pero la recarga automática falló. Recarga la página normalmente.';
+          refreshPwaRestartUi();
+          showToast('No se pudo recargar automáticamente. Tus datos permanecen intactos.', 'error');
+        }
+      }, 160);
+    } catch (error) {
+      console.error('[PROMETEO] No se pudo completar el reinicio técnico seguro.', error);
+      pwaRestartFlow.busy = false;
+      pwaRestartFlow.phase = 'error';
+      pwaRestartFlow.error = 'No se pudo completar el reinicio técnico. Puedes reintentarlo o recargar normalmente; tus datos no fueron borrados.';
+      closeModal(true);
+      refreshPwaRestartUi();
+      showToast('No se pudo completar el reinicio técnico. Tus datos permanecen intactos.', 'error');
+    }
+  }
+
   async function checkPwaUpdate(button) {
     if (swUpdateCheckPromise) return swUpdateCheckPromise;
+    recordPwaTimestamp('lastCheckAt');
+    refreshPwaStatusUi();
     if (!('serviceWorker' in navigator) || !['http:', 'https:'].includes(location.protocol)) {
       showToast('Este navegador o entorno no admite la actualización PWA.', 'error');
       return null;
@@ -2201,7 +2488,7 @@
 
         observeServiceWorkerRegistration(registration);
         syncServiceWorkerState(registration);
-        const result = await checkRegistrationForUpdate(registration);
+        const result = await checkRegistrationForUpdate(registration, { activate: false });
         syncServiceWorkerState(registration);
 
         if (!result.updated) {
@@ -2209,9 +2496,10 @@
           return { status: 'current' };
         }
 
+        showToast('Actualización disponible. Presiona “Aplicar actualización” para instalarla.');
         return { status: 'update-found', workerState: result.worker?.state || result.outcome || 'desconocido' };
       } catch (error) {
-        console.error('[DOREN] No se pudo buscar actualización.', error);
+        console.error('[PROMETEO] No se pudo buscar actualización.', error);
         syncServiceWorkerState(swRegistration);
         showToast('No se pudo comprobar la actualización.', 'error');
         return { status: 'error', error };
@@ -2222,6 +2510,45 @@
 
     swUpdateCheckPromise = runCheck().finally(() => { swUpdateCheckPromise = null; });
     return swUpdateCheckPromise;
+  }
+
+
+  async function applyPwaUpdate(button) {
+    if (pwaUpdateFlow.applying || pwaRestartFlow.busy) return;
+    pwaUpdateFlow.applying = true;
+    const originalText = button?.textContent || 'Aplicar actualización';
+    if (button) { button.disabled = true; button.textContent = 'Aplicando…'; }
+    try {
+      const registration = await ensureServiceWorkerRegistration({ allowRegister: true, waitForReady: true });
+      if (!registration) throw new Error('No se encontró un Service Worker válido.');
+      observeServiceWorkerRegistration(registration);
+      const worker = registration.waiting || pendingPwaWorker();
+      if (!worker) {
+        pwaUpdateFlow.pendingWorker = null;
+        refreshPwaStatusUi();
+        showToast('No hay una actualización pendiente para aplicar.');
+        return;
+      }
+
+      swUpdateActivationExpected = true;
+      const outcome = await waitForWorkerOutcome(worker, 15000, { activate: true });
+      if (outcome !== 'activated') throw new Error(`La actualización no terminó de activarse (${outcome}).`);
+      pwaUpdateFlow.pendingWorker = null;
+      showToast('Actualización aplicada. Recargando PROMETEO…');
+      window.setTimeout(() => {
+        if (reloadingForServiceWorker) return;
+        reloadingForServiceWorker = true;
+        window.location.reload();
+      }, 280);
+    } catch (error) {
+      swUpdateActivationExpected = false;
+      console.error('[PROMETEO] No se pudo aplicar la actualización PWA.', error);
+      showToast('No se pudo aplicar la actualización. Puedes buscarla nuevamente.', 'error');
+    } finally {
+      pwaUpdateFlow.applying = false;
+      if (button?.isConnected) { button.disabled = false; button.textContent = originalText; }
+      refreshPwaStatusUi();
+    }
   }
 
 
@@ -2638,7 +2965,7 @@ ${detail}`;
         copied = true;
       }
     } catch (error) {
-      console.warn('[DOREN] Clipboard API no disponible; se intentará método alterno.', error);
+      console.warn('[PROMETEO] Clipboard API no disponible; se intentará método alterno.', error);
     }
 
     if (!copied) {
@@ -6285,7 +6612,7 @@ ${detail}`;
           });
         }
       } catch (error) {
-        console.error('[DOREN] Producto guardado, pero falló la foto.', error);
+        console.error('[PROMETEO] Producto guardado, pero falló la foto.', error);
         showToast('Producto guardado, pero no se pudo persistir la foto.', 'error');
       }
 
@@ -6562,7 +6889,7 @@ ${detail}`;
     const identity = getBusinessIdentity();
     syncGlobalIdentityShell(identity);
     els.currentSection.textContent = module.label;
-    document.title = `${module.label} · ${identity.appName || APP.name}`;
+    syncApplicationTitle(module.label, identity);
     updateActiveNavigation(route);
 
     if (route === 'inicio') els.content.innerHTML = renderHome();
@@ -6713,7 +7040,7 @@ ${detail}`;
     if (action === 'export-catalog-pdf') {
       const requestedMode = actionTarget.dataset.mode === 'disponibles' ? 'disponibles' : 'completo';
       exportCatalogPdf(requestedMode, actionTarget).catch((error) => {
-        console.error('[DOREN] No se pudo generar el catálogo PDF.', error);
+        console.error('[PROMETEO] No se pudo generar el catálogo PDF.', error);
         showToast('No se pudo generar el PDF del catálogo.', 'error');
       });
     }
@@ -6726,8 +7053,11 @@ ${detail}`;
     if (action === 'review-danger-delete') reviewDangerDeleteConfirmation();
     if (action === 'prepare-danger-delete') prepareDangerDeleteFlow();
     if (action === 'choose-backup-import') document.getElementById('backupImportInput')?.click();
-    if (action === 'install-pwa') installPwa().catch((error) => { console.error('[DOREN] No se pudo iniciar la instalación PWA.', error); showToast('No se pudo iniciar la instalación.', 'error'); });
+    if (action === 'install-pwa') installPwa().catch((error) => { console.error('[PROMETEO] No se pudo iniciar la instalación PWA.', error); showToast('No se pudo iniciar la instalación.', 'error'); });
     if (action === 'check-pwa-update') checkPwaUpdate(actionTarget);
+    if (action === 'apply-pwa-update') applyPwaUpdate(actionTarget);
+    if (action === 'open-pwa-restart-confirmation') openPwaRestartConfirmation();
+    if (action === 'execute-pwa-restart') executePwaRestartFlow();
     if (action === 'clear-client-search') {
       clientSearch = '';
       renderRoute();
@@ -6902,6 +7232,17 @@ ${detail}`;
     if (status) status.textContent = serviceWorkerStatusLabel();
     const connection = document.getElementById('pwaConnectionStatus');
     if (connection) connection.textContent = navigator.onLine ? 'En línea' : 'Sin conexión';
+    const pwaConfig = getPwaConfiguration();
+    const lastCheck = document.getElementById('pwaLastCheckAt');
+    if (lastCheck) lastCheck.textContent = pwaConfig.lastCheckAt ? formatDate(pwaConfig.lastCheckAt, true) : 'Nunca';
+    const lastUpdate = document.getElementById('pwaLastUpdateAt');
+    if (lastUpdate) lastUpdate.textContent = pwaConfig.lastUpdateAt ? formatDate(pwaConfig.lastUpdateAt, true) : 'Nunca';
+    const applyButton = document.getElementById('pwaApplyUpdateButton');
+    if (applyButton) {
+      const available = Boolean(pendingPwaWorker());
+      applyButton.hidden = !available;
+      applyButton.disabled = !available || pwaUpdateFlow.applying || pwaRestartFlow.busy;
+    }
   }
 
   function setServiceWorkerRuntimeState(phase, error = null) {
@@ -6984,13 +7325,17 @@ ${detail}`;
   function announceServiceWorkerUpdateDetected(worker) {
     if (!worker || announcedSwUpdateWorkers.has(worker)) return;
     announcedSwUpdateWorkers.add(worker);
-    showToast('Nueva versión detectada. Aplicando actualización…');
+    showToast('Nueva versión detectada. Lista para aplicar.');
   }
 
-  function waitForWorkerOutcome(worker, timeoutMs = 15000) {
+  function waitForWorkerOutcome(worker, timeoutMs = 15000, { activate = false } = {}) {
     if (!worker) return Promise.resolve('missing');
     if (worker.state === 'activated') return Promise.resolve('activated');
     if (worker.state === 'redundant') return Promise.reject(new Error('La actualización del Service Worker quedó en estado redundant.'));
+    if (worker.state === 'installed' && !activate) return Promise.resolve('installed');
+    if (worker.state === 'installed' && activate) {
+      try { worker.postMessage({ type: 'SKIP_WAITING' }); } catch (error) {}
+    }
 
     return new Promise((resolve, reject) => {
       let timer = null;
@@ -7000,7 +7345,13 @@ ${detail}`;
       };
       const onStateChange = () => {
         if (worker.state === 'installed') {
-          try { worker.postMessage({ type: 'SKIP_WAITING' }); } catch (error) {}
+          if (activate) {
+            try { worker.postMessage({ type: 'SKIP_WAITING' }); } catch (error) {}
+          } else {
+            cleanup();
+            resolve('installed');
+            return;
+          }
         }
         if (worker.state === 'activated') { cleanup(); resolve('activated'); }
         else if (worker.state === 'redundant') { cleanup(); reject(new Error('La actualización del Service Worker quedó en estado redundant.')); }
@@ -7010,7 +7361,7 @@ ${detail}`;
     });
   }
 
-  async function checkRegistrationForUpdate(registration) {
+  async function checkRegistrationForUpdate(registration, { activate = false } = {}) {
     if (!registrationHasRootWorker(registration)) throw new Error('No existe un registro válido del Service Worker raíz para comprobar.');
     setServiceWorkerRuntimeState('updating');
 
@@ -7018,8 +7369,10 @@ ${detail}`;
     if (alreadyPending) {
       observeServiceWorkerWorker(alreadyPending);
       announceServiceWorkerUpdateDetected(alreadyPending);
-      if (registration.waiting === alreadyPending) alreadyPending.postMessage({ type: 'SKIP_WAITING' });
-      const outcome = await waitForWorkerOutcome(alreadyPending);
+      const outcome = await waitForWorkerOutcome(alreadyPending, 15000, { activate });
+      if (outcome === 'installed') pwaUpdateFlow.pendingWorker = alreadyPending;
+      if (outcome === 'activated') pwaUpdateFlow.pendingWorker = null;
+      refreshPwaStatusUi();
       return { updated: true, worker: alreadyPending, outcome };
     }
 
@@ -7045,10 +7398,17 @@ ${detail}`;
       if (!foundWorker) {
         foundWorker = await Promise.race([updateFoundPromise, delay(700).then(() => null)]);
       }
-      if (!foundWorker) return { updated: false, worker: null, outcome: 'current' };
+      if (!foundWorker) {
+        pwaUpdateFlow.pendingWorker = null;
+        syncServiceWorkerState(registration);
+        refreshPwaStatusUi();
+        return { updated: false, worker: null, outcome: 'current' };
+      }
 
-      if (registration.waiting === foundWorker) foundWorker.postMessage({ type: 'SKIP_WAITING' });
-      const outcome = await waitForWorkerOutcome(foundWorker);
+      const outcome = await waitForWorkerOutcome(foundWorker, 15000, { activate });
+      if (outcome === 'installed') pwaUpdateFlow.pendingWorker = foundWorker;
+      if (outcome === 'activated') pwaUpdateFlow.pendingWorker = null;
+      refreshPwaStatusUi();
       return { updated: true, worker: foundWorker, outcome };
     } finally {
       registration.removeEventListener('updatefound', onUpdateFound);
@@ -7060,10 +7420,18 @@ ${detail}`;
     observedSwWorkers.add(worker);
     worker.addEventListener('statechange', () => {
       syncServiceWorkerState(swRegistration);
-      if (worker.state === 'installed' && rootControllerIsActive()) announceServiceWorkerUpdateDetected(worker);
+      if (worker.state === 'installed' && rootControllerIsActive()) {
+        pwaUpdateFlow.pendingWorker = worker;
+        announceServiceWorkerUpdateDetected(worker);
+        refreshPwaStatusUi();
+      }
+      if (worker.state === 'activated' && pwaUpdateFlow.pendingWorker === worker) {
+        pwaUpdateFlow.pendingWorker = null;
+        refreshPwaStatusUi();
+      }
       if (worker.state === 'redundant' && !swRegistration?.active && !rootControllerIsActive()) {
         const error = new Error('El Service Worker quedó en estado redundant.');
-        console.error('[DOREN] Error de Service Worker.', error);
+        console.error('[PROMETEO] Error de Service Worker.', error);
         setServiceWorkerRuntimeState('error', error);
       }
     });
@@ -7094,7 +7462,7 @@ ${detail}`;
       ]);
       return registrationHasRootWorker(registration) ? registration : null;
     } catch (error) {
-      console.warn('[DOREN] Service Worker ready no pudo confirmarse todavía.', error);
+      console.warn('[PROMETEO] Service Worker ready no pudo confirmarse todavía.', error);
       return null;
     } finally {
       if (timer) window.clearTimeout(timer);
@@ -7109,7 +7477,7 @@ ${detail}`;
       registration = await navigator.serviceWorker.getRegistration(SW_SCOPE_URL);
       if (registrationHasRootWorker(registration)) return registration;
     } catch (error) {
-      console.warn('[DOREN] getRegistration() no pudo confirmar el Service Worker raíz.', error);
+      console.warn('[PROMETEO] getRegistration() no pudo confirmar el Service Worker raíz.', error);
     }
 
     if (typeof navigator.serviceWorker.getRegistrations === 'function') {
@@ -7118,7 +7486,7 @@ ${detail}`;
         registration = registrations.find((candidate) => registrationHasRootWorker(candidate));
         if (registration) return registration;
       } catch (error) {
-        console.warn('[DOREN] getRegistrations() no pudo confirmar el Service Worker raíz.', error);
+        console.warn('[PROMETEO] getRegistrations() no pudo confirmar el Service Worker raíz.', error);
       }
     }
     return null;
@@ -7132,14 +7500,14 @@ ${detail}`;
       const legacyScopeRegistration = await navigator.serviceWorker.getRegistration(new URL('pwa/', document.baseURI).href);
       if (legacyScopeRegistration) registrations.add(legacyScopeRegistration);
     } catch (error) {
-      console.warn('[DOREN] No se pudo consultar el registro PWA anterior por scope.', error);
+      console.warn('[PROMETEO] No se pudo consultar el registro PWA anterior por scope.', error);
     }
 
     try {
       const rootScopeRegistration = await navigator.serviceWorker.getRegistration(SW_SCOPE_URL);
       if (rootScopeRegistration) registrations.add(rootScopeRegistration);
     } catch (error) {
-      console.warn('[DOREN] No se pudo consultar el registro anterior en scope raíz.', error);
+      console.warn('[PROMETEO] No se pudo consultar el registro anterior en scope raíz.', error);
     }
 
     if (typeof navigator.serviceWorker.getRegistrations === 'function') {
@@ -7147,7 +7515,7 @@ ${detail}`;
         const existing = await navigator.serviceWorker.getRegistrations();
         existing.forEach((registration) => registrations.add(registration));
       } catch (error) {
-        console.warn('[DOREN] No se pudo enumerar los registros anteriores del Service Worker.', error);
+        console.warn('[PROMETEO] No se pudo enumerar los registros anteriores del Service Worker.', error);
       }
     }
 
@@ -7159,7 +7527,7 @@ ${detail}`;
         if (unregistered) removed += 1;
         if (swRegistration === registration) swRegistration = null;
       } catch (error) {
-        console.warn('[DOREN] No se pudo desregistrar un Service Worker anterior.', error);
+        console.warn('[PROMETEO] No se pudo desregistrar un Service Worker anterior.', error);
       }
     }
     return removed;
@@ -7172,7 +7540,7 @@ ${detail}`;
       sessionStorage.setItem(SW_ROOT_MIGRATION_RELOAD_KEY, String(Date.now()));
       window.setTimeout(() => window.location.reload(), 180);
     } catch (error) {
-      console.warn('[DOREN] No se pudo preparar la recarga única de migración PWA.', error);
+      console.warn('[PROMETEO] No se pudo preparar la recarga única de migración PWA.', error);
     }
   }
 
@@ -7250,7 +7618,7 @@ ${detail}`;
     if (swRegistrationPromise) return swRegistrationPromise;
     swRegistrationPromise = resolveServiceWorkerRegistration(options)
       .catch(async (error) => {
-        console.error('[DOREN] No se pudo registrar o recuperar el Service Worker raíz.', error);
+        console.error('[PROMETEO] No se pudo registrar o recuperar el Service Worker raíz.', error);
 
         const recovered = await findExistingServiceWorkerRegistration();
         if (recovered) {
@@ -7275,7 +7643,7 @@ ${detail}`;
 
   function markPendingPwaAppliedNotice() {
     try { sessionStorage.setItem(SW_UPDATE_APPLIED_SESSION_KEY, String(Date.now())); }
-    catch (error) { console.warn('[DOREN] No se pudo guardar el estado temporal de actualización.', error); }
+    catch (error) { console.warn('[PROMETEO] No se pudo guardar el estado temporal de actualización.', error); }
   }
 
   function consumePendingPwaAppliedNotice() {
@@ -7285,7 +7653,7 @@ ${detail}`;
       sessionStorage.removeItem(SW_UPDATE_APPLIED_SESSION_KEY);
       showToast('Actualización aplicada.');
     } catch (error) {
-      console.warn('[DOREN] No se pudo leer el estado temporal de actualización.', error);
+      console.warn('[PROMETEO] No se pudo leer el estado temporal de actualización.', error);
     }
   }
 
@@ -7349,9 +7717,22 @@ ${detail}`;
           hasSeenServiceWorkerController = true;
           return;
         }
+
+        const realUpdateApplied = swUpdateActivationExpected;
+        swUpdateActivationExpected = false;
+        if (realUpdateApplied) {
+          recordPwaTimestamp('lastUpdateAt');
+          markPendingPwaAppliedNotice();
+          pwaUpdateFlow.pendingWorker = null;
+        }
+
+        if (pwaRestartFlow.busy) {
+          console.info('[PROMETEO] Cambio de controlador detectado durante Reiniciar aplicación; la recarga queda coordinada por el reinicio técnico.');
+          return;
+        }
+
         if (reloadingForServiceWorker) return;
         reloadingForServiceWorker = true;
-        markPendingPwaAppliedNotice();
         window.setTimeout(() => window.location.reload(), 120);
       });
     }

@@ -26,3 +26,4 @@ python3 -m http.server 8080
 Luego abrir `http://localhost:8080/`.
 
 > Para instalar la PWA y probar Service Worker se requiere HTTP/HTTPS (localhost es válido). Abrir directamente con `file://` no activa Service Worker.
+# prometeo

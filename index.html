@@ -1,0 +1,63 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#081f45">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="default">
+  <meta name="apple-mobile-web-app-title" content="DOREN">
+  <meta name="description" content="PROMETEO — gestión sencilla para un emprendimiento.">
+  <title>PROMETEO</title>
+  <link rel="manifest" href="pwa/manifest.webmanifest">
+  <link rel="apple-touch-icon" href="assets/apple-touch-icon.png">
+  <link rel="icon" type="image/png" sizes="192x192" href="pwa/icons/icon-192.png">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <div class="app-shell">
+    <aside class="sidebar" id="sidebar" aria-label="Navegación principal">
+      <div class="brand brand--sidebar">
+        <div class="brand__panel">
+          <img id="sidebarBrandLogo" src="assets/prometeo-logo.png" alt="PROMETEO" class="brand__logo">
+        </div>
+      </div>
+      <nav class="nav-list" id="navList"></nav>
+      <div class="sidebar__footer">
+        <span class="status-dot" aria-hidden="true"></span>
+        <span>Base local lista</span>
+      </div>
+    </aside>
+
+    <div class="main-column">
+      <header class="topbar">
+        <button class="icon-button menu-button" id="menuButton" type="button" aria-label="Abrir menú" aria-controls="sidebar" aria-expanded="false">
+          <span></span><span></span><span></span>
+        </button>
+        <a class="topbar__brand" href="#inicio" aria-label="Ir a Inicio">
+          <img id="topbarBrandLogo" src="assets/prometeo-logo.png" alt="PROMETEO">
+        </a>
+        <div class="topbar__meta">
+          <span id="topbarBusinessName" class="topbar__eyebrow">PROMETEO</span>
+          <span id="currentSection">Inicio</span>
+        </div>
+      </header>
+
+      <main class="content" id="appContent" tabindex="-1"></main>
+
+      <footer class="footer">
+        <span id="footerBusinessName">PROMETEO</span>
+        <span>Versión <strong id="footerVersion">1.33</strong></span>
+      </footer>
+    </div>
+  </div>
+
+  <button class="scrim" id="scrim" type="button" aria-label="Cerrar menú"></button>
+
+  <noscript>
+    <div class="noscript">Esta aplicación necesita JavaScript para funcionar.</div>
+  </noscript>
+
+  <script src="app.js" defer></script>
+</body>
+</html>

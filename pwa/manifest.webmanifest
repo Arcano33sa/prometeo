@@ -1,0 +1,35 @@
+{
+  "id": "../index.html",
+  "name": "DOREN Fashion & Style",
+  "short_name": "DOREN",
+  "description": "Gestión sencilla para un emprendimiento de moda.",
+  "lang": "es",
+  "start_url": "../index.html#inicio",
+  "scope": "../",
+  "display": "standalone",
+  "display_override": ["standalone", "minimal-ui"],
+  "orientation": "any",
+  "background_color": "#fcfaf6",
+  "theme_color": "#081f45",
+  "categories": ["business", "shopping", "productivity"],
+  "icons": [
+    {
+      "src": "icons/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "icons/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "icons/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
+    }
+  ]
+}

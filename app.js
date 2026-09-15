@@ -175,6 +175,35 @@
     return identity?.horizontalLogo?.dataUrl || identity?.mainLogo?.dataUrl || PROMETEO_HORIZONTAL_LOGO_PATH;
   }
 
+  function ensureIdentityIconLink(id, rel) {
+    let link = document.getElementById(id);
+    if (!link) {
+      link = document.createElement('link');
+      link.id = id;
+      link.rel = rel;
+      document.head.appendChild(link);
+    }
+    return link;
+  }
+
+  function syncBusinessFavicon(identity = getBusinessIdentity()) {
+    const normalizedIdentity = normalizeBusinessIdentity(identity);
+    const source = businessIdentityMainLogoSrc(normalizedIdentity);
+    const type = normalizedIdentity.mainLogo?.type || 'image/png';
+
+    const favicon = ensureIdentityIconLink('businessFavicon', 'icon');
+    favicon.type = type;
+    favicon.removeAttribute('sizes');
+    if (favicon.getAttribute('href') !== source) favicon.setAttribute('href', source);
+
+    document.querySelectorAll('link[rel]').forEach((link) => {
+      if (link === favicon) return;
+      const relTokens = String(link.getAttribute('rel') || '').toLowerCase().split(/\s+/).filter(Boolean);
+      if (relTokens.includes('icon') && !relTokens.includes('apple-touch-icon')) link.remove();
+    });
+
+  }
+
   function armBusinessLogoFallback(image) {
     if (!image || image.dataset.businessLogoArmed === 'true') return;
     image.dataset.businessLogoArmed = 'true';
@@ -217,6 +246,7 @@
     const businessName = businessIdentityDisplayName(identity);
     const appName = identity.appName || APP.name;
     const horizontalLogo = businessIdentityHorizontalLogoSrc(identity);
+    syncBusinessFavicon(identity);
 
     const sidebarLogo = document.getElementById('sidebarBrandLogo');
     if (sidebarLogo) {

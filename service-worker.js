@@ -1,6 +1,6 @@
 'use strict';
 
-const CACHE_VERSION = 'prometeo-v1.33.0-20260914-final-hardened';
+const CACHE_VERSION = 'prometeo-v1.33.0-20260914-favicon-whitelabel-final';
 const CORE_CACHE = `${CACHE_VERSION}-core`;
 const RUNTIME_CACHE = `${CACHE_VERSION}-runtime`;
 const MANAGED_CACHE_NAME_PATTERN = /^(?:prometeo|doren)-v[0-9][a-z0-9._-]*-(?:core|runtime)$/i;
@@ -14,7 +14,8 @@ const CORE_ASSETS = [
   './assets/apple-touch-icon.png',
   './pwa/manifest.webmanifest',
   './pwa/icons/icon-192.png',
-  './pwa/icons/icon-512.png'
+  './pwa/icons/icon-512.png',
+  './pwa/icons/icon-maskable-512.png'
 ];
 
 function isManagedCacheName(name) {

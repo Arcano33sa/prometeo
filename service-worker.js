@@ -1,6 +1,6 @@
 'use strict';
 
-const CACHE_VERSION = 'prometeo-v1.33.0-20260914-favicon-whitelabel-final';
+const CACHE_VERSION = 'prometeo-v1.33.0-20260915-logo-sin-marco-final';
 const CORE_CACHE = `${CACHE_VERSION}-core`;
 const RUNTIME_CACHE = `${CACHE_VERSION}-runtime`;
 const MANAGED_CACHE_NAME_PATTERN = /^(?:prometeo|doren)-v[0-9][a-z0-9._-]*-(?:core|runtime)$/i;
